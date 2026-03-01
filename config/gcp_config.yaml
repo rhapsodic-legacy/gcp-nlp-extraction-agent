@@ -1,0 +1,37 @@
+# ============================================================
+# GCP Configuration — All the Knobs and Dials in One Place
+# ============================================================
+# I'm a firm believer that configuration should live in one file,
+# clearly labeled, easy to find. No hunting through environment
+# variables or scattered .env files. One source of truth.
+# Change your project ID here and everything downstream picks it up.
+# ============================================================
+
+project_id: "project-b95d122b-3728-497b-93f"
+location: "us-central1"
+
+# Vertex AI / Gemini — the generative AI backbone
+# gemini-2.0-flash is fast and cheap. Great for prototyping.
+# Swap to gemini-pro for heavier reasoning tasks if needed.
+gemini_model: "gemini-2.5-flash"
+
+# Cloud Storage — where raw data lands first
+gcs_bucket: "nlp-fun-data"
+gcs_raw_prefix: "raw/"
+gcs_processed_prefix: "processed/"
+
+# BigQuery — the production document store
+# SQL interface, scales to petabytes, everyone knows how to query it.
+bq_dataset: "nlp_fun"
+bq_table_documents: "documents"
+bq_table_extractions: "extractions"
+
+# Firestore — agent session memory for production
+# Real-time, document-oriented, perfect for conversation state.
+firestore_collection: "agent_sessions"
+
+# Processing limits — keep these sane during prototyping!
+# 5000 docs per source is plenty for proving the pipeline works.
+# Crank these up once you've validated everything end-to-end.
+max_documents_per_source: 5000
+batch_size: 32
