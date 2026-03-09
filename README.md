@@ -1,4 +1,4 @@
-# Intelligent Data Extraction & Summarisation with Agentic Workflows on GCP    
+# Intelligent Data Extraction & Summarisation with Agentic Workflows on GCP     
 
 Extract entities, generate abstractive summaries, and orchestrate NLP capabilities through a ReAct-style agent, all backed by Google Cloud Platform services.
 
