@@ -1,18 +1,5 @@
-"""Needle-in-a-haystack evaluation for extraction and agent retrieval.
-
-The idea is simple but powerful: take a large corpus, inject known
-"needles" (specific entities, facts, or statements) at controlled
-positions, then test whether our extraction pipeline can find them.
-
-This gives us something most NLP prototypes lack: an objective,
-quantifiable recall metric. Instead of "the summary looks reasonable,"
-we get "the system found 47 out of 50 injected entities." That's the
-kind of number you can put in a report and defend.
-
-It's also directly relevant to the agent scenario — if a user asks
-"did anyone mention a product recall in Q3?", the agent needs to find
-that needle in a haystack of thousands of reviews and tickets. This
-module tests exactly that capability.
+"""Needle-in-a-haystack evaluation: inject known entities at controlled
+positions in a corpus and measure extraction recall.
 """
 
 import random
@@ -23,8 +10,7 @@ from typing import Optional
 from ..data.loader import Document
 
 
-# Needles — synthetic but realistic facts that are distinctive enough
-# to unambiguously detect in extraction output
+# Synthetic facts with distinctive entity names to avoid collisions with real data.
 DEFAULT_NEEDLES = [
     {
         "text": "Dr. Evelyn Thorncastle reported a critical malfunction in the XR-7 stabilizer unit on March 14th, 2024.",
@@ -93,16 +79,11 @@ class NeedleResult:
 
 
 class NeedleHaystackEvaluator:
-    """Inject known needles into a document corpus and measure extraction recall.
+    """Inject synthetic needles into a document corpus and measure extraction recall.
 
-    Workflow:
-    1. build_haystack() — combine real documents with injected needles
-    2. evaluate_extraction() — run an extractor and measure what it found
-    3. report() — print a summary of recall by position and entity type
+    Workflow: build_haystack() -> evaluate_extraction() -> report().
 
-    The needles are designed to be unambiguously synthetic — names like
-    "Zenithra Corp" and "Dr. Evelyn Thorncastle" won't collide with real
-    data, so we can confidently attribute any detection to the needle.
+    Needle entities use fictitious names to avoid collisions with real data.
     """
 
     def __init__(self, needles: list[dict] = None):
@@ -114,26 +95,21 @@ class NeedleHaystackEvaluator:
         num_needles: int = 5,
         seed: int = 42,
     ) -> tuple[list[Document], list[dict]]:
-        """Build a haystack by injecting needles into real documents.
-
-        Distributes needles across three position bands:
-        - early: first 20% of documents
-        - middle: 40-60% range
-        - deep: last 20% of documents
+        """Inject needles into documents at early/middle/deep position bands.
 
         Args:
-            documents: Real documents to use as the haystack.
-            num_needles: How many needles to inject.
+            documents: Source documents forming the haystack.
+            num_needles: Number of needles to inject.
             seed: Random seed for reproducibility.
 
         Returns:
-            Tuple of (modified document list, list of injection records).
+            Tuple of (modified document list, injection records).
         """
         rng = random.Random(seed)
         num_needles = min(num_needles, len(self.needles))
         selected_needles = rng.sample(self.needles, num_needles)
 
-        # Define position bands
+        # Position bands: early (0-20%), middle (40-60%), deep (80-100%)
         n = len(documents)
         bands = {
             "early": (0, int(n * 0.2)),
@@ -153,7 +129,7 @@ class NeedleHaystackEvaluator:
             insert_idx = rng.randint(lo, min(hi - 1, n - 1))
             needle_id = f"needle_{uuid.uuid4().hex[:8]}"
 
-            # Inject the needle text into the document
+            # Append needle text to target document
             target_doc = documents[insert_idx]
             original_text = target_doc.text
             target_doc.text = f"{original_text}\n\n{needle['text']}"
@@ -177,19 +153,18 @@ class NeedleHaystackEvaluator:
         injections: list[dict],
         extractor,
     ) -> list[NeedleResult]:
-        """Run extraction on injected documents and measure needle recall.
+        """Run extraction and score each needle on entity recall.
 
-        For each needle, checks whether the extractor found the expected
-        entities. A needle is "found" if at least one of its key entities
+        A needle is marked as detected if at least one expected entity
         appears in the extraction output.
 
         Args:
             documents: Documents with injected needles.
             injections: Injection records from build_haystack().
-            extractor: Any extractor with an extract(text) method.
+            extractor: Object with an extract(text) method.
 
         Returns:
-            List of NeedleResult objects with per-needle recall scores.
+            List of NeedleResult with per-needle recall scores.
         """
         results = []
 
@@ -197,23 +172,20 @@ class NeedleHaystackEvaluator:
             doc_idx = injection["doc_index"]
             doc = documents[doc_idx]
 
-            # Run extraction
+            # Extract entities from the document
             extraction = extractor.extract(doc.text)
 
-            # Collect all extracted entity texts (lowercased for matching)
+            # Lowercase extracted entity texts for case-insensitive matching
             if hasattr(extraction, "entities"):
                 extracted_texts = {e.text.lower() for e in extraction.entities}
             else:
                 extracted_texts = set()
 
-            # Check which expected entities were found
+            # Score expected entities via bidirectional substring match
             expected = injection["entities"]
             found = {}
             for etype, etext in expected.items():
-                # Bidirectional substring matching: the expected text may be
-                # inside an extracted entity, or vice versa (e.g. Presidio
-                # finds "Evelyn Thorncastle" while expected is "Dr. Evelyn
-                # Thorncastle")
+                # Bidirectional substring match (handles partial extractions)
                 etext_lower = etext.lower()
                 is_found = any(
                     etext_lower in ext or ext in etext_lower
@@ -239,10 +211,7 @@ class NeedleHaystackEvaluator:
 
     @staticmethod
     def report(results: list[NeedleResult]) -> dict:
-        """Aggregate needle results and print a report.
-
-        Returns aggregate stats and prints a human-readable summary.
-        """
+        """Aggregate results by position and entity type; print summary and return stats."""
         if not results:
             print("No needle results to report.")
             return {}
@@ -251,7 +220,7 @@ class NeedleHaystackEvaluator:
         detected = sum(1 for r in results if r.found)
         avg_recall = sum(r.recall for r in results) / total
 
-        # By position
+        # Aggregate by position band
         by_position = {}
         for r in results:
             if r.position not in by_position:
@@ -260,7 +229,7 @@ class NeedleHaystackEvaluator:
             by_position[r.position]["detected"] += 1 if r.found else 0
             by_position[r.position]["recall_sum"] += r.recall
 
-        # By entity type
+        # Aggregate by entity type
         entity_hits = {}
         entity_total = {}
         for r in results:
@@ -268,7 +237,7 @@ class NeedleHaystackEvaluator:
                 entity_total[etype] = entity_total.get(etype, 0) + 1
                 entity_hits[etype] = entity_hits.get(etype, 0) + (1 if was_found else 0)
 
-        # Print report
+        # Print human-readable summary
         print(f"\n{'=' * 60}")
         print(f"  Needle-in-a-Haystack Evaluation")
         print(f"{'=' * 60}")
@@ -290,7 +259,7 @@ class NeedleHaystackEvaluator:
             print(f"    {etype:12s}: {hits}/{tot} found ({hits/tot*100:.0f}%)")
         print(f"{'=' * 60}\n")
 
-        # Per-needle detail
+        # Per-needle detail breakdown
         print("  INDIVIDUAL NEEDLE RESULTS")
         for r in results:
             status = "FOUND" if r.found else "MISSED"

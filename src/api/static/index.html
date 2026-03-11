@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Customer Insight Agent</title>
+  <style>
+    :root {
+      --bg: #0a0a0f;
+      --surface: #12121a;
+      --surface-2: #1a1a26;
+      --border: #2a2a3a;
+      --text: #e0e0e8;
+      --text-dim: #8888a0;
+      --accent: #6366f1;
+      --accent-glow: rgba(99, 102, 241, 0.15);
+      --green: #22c55e;
+      --amber: #f59e0b;
+      --red: #ef4444;
+      --blue: #3b82f6;
+      --radius: 10px;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ───────────────────────────────────────── */
+    header {
+      border-bottom: 1px solid var(--border);
+      padding: 16px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--surface);
+    }
+
+    header h1 {
+      font-size: 18px;
+      font-weight: 600;
+      letter-spacing: -0.3px;
+    }
+
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--red);
+      display: inline-block;
+      margin-right: 6px;
+    }
+    .status-dot.connected { background: var(--green); }
+
+    .status-bar {
+      font-size: 13px;
+      color: var(--text-dim);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    /* ── Main layout ──────────────────────────────────── */
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      max-width: 860px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 24px;
+      gap: 16px;
+    }
+
+    /* ── Steps panel ──────────────────────────────────── */
+    #steps-container {
+      flex: 1;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding-bottom: 16px;
+    }
+
+    .step {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      animation: fadeIn 0.25s ease-out;
+    }
+
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .step-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .step-badge {
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .badge-thought { background: rgba(99, 102, 241, 0.15); color: var(--accent); }
+    .badge-action { background: rgba(245, 158, 11, 0.15); color: var(--amber); }
+    .badge-observation { background: rgba(59, 130, 246, 0.15); color: var(--blue); }
+    .badge-answer { background: rgba(34, 197, 94, 0.15); color: var(--green); }
+    .badge-critic { background: rgba(239, 68, 68, 0.15); color: var(--red); }
+    .badge-error { background: rgba(239, 68, 68, 0.15); color: var(--red); }
+
+    .step-content {
+      font-size: 14px;
+      line-height: 1.6;
+      color: var(--text);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .step-content.observation {
+      font-family: 'JetBrains Mono', 'Fira Code', monospace;
+      font-size: 12px;
+      color: var(--text-dim);
+      background: var(--surface-2);
+      padding: 10px 12px;
+      border-radius: 6px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+
+    .step.answer-step {
+      border-color: var(--green);
+      background: rgba(34, 197, 94, 0.04);
+    }
+
+    /* ── Critic verdict ───────────────────────────────── */
+    .critic-scores {
+      display: flex;
+      gap: 16px;
+      margin-top: 8px;
+    }
+    .critic-score {
+      font-size: 12px;
+      font-family: monospace;
+    }
+
+    /* ── Input area ───────────────────────────────────── */
+    .input-area {
+      display: flex;
+      gap: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 14px;
+      align-items: center;
+    }
+
+    .input-area:focus-within {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+
+    #query-input {
+      flex: 1;
+      background: none;
+      border: none;
+      outline: none;
+      color: var(--text);
+      font-size: 15px;
+      font-family: inherit;
+    }
+
+    #query-input::placeholder { color: var(--text-dim); }
+
+    #send-btn {
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 8px 20px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+
+    #send-btn:hover { opacity: 0.85; }
+    #send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .options {
+      display: flex;
+      gap: 16px;
+      align-items: center;
+      font-size: 13px;
+      color: var(--text-dim);
+      padding: 0 4px;
+    }
+
+    .options label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+
+    /* ── Spinner ──────────────────────────────────────── */
+    .spinner {
+      display: none;
+      width: 16px; height: 16px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+    }
+    .spinner.active { display: inline-block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Empty state ──────────────────────────────────── */
+    .empty-state {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-dim);
+      gap: 8px;
+    }
+    .empty-state h2 { font-size: 20px; color: var(--text); font-weight: 500; }
+    .empty-state p { font-size: 14px; }
+    .example-queries {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+      justify-content: center;
+    }
+    .example-query {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 6px 14px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: border-color 0.15s;
+    }
+    .example-query:hover { border-color: var(--accent); }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Customer Insight Agent</h1>
+  <div class="status-bar">
+    <span class="spinner" id="spinner"></span>
+    <span><span class="status-dot" id="status-dot"></span><span id="status-text">Checking...</span></span>
+  </div>
+</header>
+
+<main>
+  <div id="steps-container">
+    <div class="empty-state" id="empty-state">
+      <h2>Ask a question about your data</h2>
+      <p>The agent will search, extract, and analyze — showing its reasoning in real time.</p>
+      <div class="example-queries">
+        <div class="example-query" onclick="useExample(this)">What are the top customer complaints?</div>
+        <div class="example-query" onclick="useExample(this)">Summarize recent support tickets about shipping</div>
+        <div class="example-query" onclick="useExample(this)">Extract key entities from battery-related reviews</div>
+        <div class="example-query" onclick="useExample(this)">Compare sentiment across product categories</div>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="input-area">
+      <input type="text" id="query-input" placeholder="Ask the agent a question..." autocomplete="off" />
+      <button id="send-btn" onclick="sendQuery()">Send</button>
+    </div>
+    <div class="options">
+      <label><input type="checkbox" id="critic-toggle" /> Enable critic</label>
+    </div>
+  </div>
+</main>
+
+<script>
+  const stepsContainer = document.getElementById('steps-container');
+  const queryInput = document.getElementById('query-input');
+  const sendBtn = document.getElementById('send-btn');
+  const spinner = document.getElementById('spinner');
+  const statusDot = document.getElementById('status-dot');
+  const statusText = document.getElementById('status-text');
+  const emptyState = document.getElementById('empty-state');
+  const criticToggle = document.getElementById('critic-toggle');
+
+  // Health check on load
+  fetch('/api/health')
+    .then(r => r.json())
+    .then(d => {
+      statusDot.classList.add('connected');
+      const parts = [];
+      if (d.api_key_set) parts.push('API key set');
+      if (d.data_loaded) parts.push(`${d.documents_count} docs loaded`);
+      else parts.push('No data loaded');
+      statusText.textContent = parts.join(' · ');
+    })
+    .catch(() => { statusText.textContent = 'Disconnected'; });
+
+  queryInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendQuery(); }
+  });
+
+  function useExample(el) {
+    queryInput.value = el.textContent;
+    queryInput.focus();
+  }
+
+  async function sendQuery() {
+    const query = queryInput.value.trim();
+    if (!query) return;
+
+    // Clear empty state and previous results
+    if (emptyState) emptyState.remove();
+    stepsContainer.innerHTML = '';
+
+    sendBtn.disabled = true;
+    spinner.classList.add('active');
+    queryInput.value = '';
+
+    // Add user query step
+    addStep('query', `"${query}"`, 'Query');
+
+    try {
+      const resp = await fetch('/api/query/stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query,
+          enable_critic: criticToggle.checked,
+        }),
+      });
+
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();  // keep incomplete line
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const evt = JSON.parse(line.slice(6));
+            handleEvent(evt);
+          } catch {}
+        }
+      }
+    } catch (err) {
+      addStep('error', `Connection error: ${err.message}`, 'Error');
+    }
+
+    sendBtn.disabled = false;
+    spinner.classList.remove('active');
+  }
+
+  function handleEvent(evt) {
+    switch (evt.type) {
+      case 'thought':
+        addStep('thought', evt.content, `Step ${evt.step} — Thought`);
+        break;
+      case 'action':
+        addStep('action', evt.tool_call, `Step ${evt.step} — Action`);
+        break;
+      case 'observation':
+        addStep('observation', evt.content, `Step ${evt.step} — Observation`);
+        break;
+      case 'answer':
+        addStep('answer', evt.content, 'Answer');
+        break;
+      case 'critic':
+        const scores = evt.scores;
+        const detail = `Verdict: ${evt.verdict}\nCompleteness: ${scores.completeness}/5  Grounding: ${scores.grounding}/5  Coherence: ${scores.coherence}/5  Overall: ${scores.overall.toFixed(1)}/5`;
+        addStep('critic', detail, 'Critic');
+        break;
+      case 'error':
+        addStep('error', evt.message, 'Error');
+        break;
+    }
+  }
+
+  function addStep(type, content, label) {
+    const step = document.createElement('div');
+    step.className = `step${type === 'answer' ? ' answer-step' : ''}`;
+
+    const badgeClass = {
+      thought: 'badge-thought', action: 'badge-action',
+      observation: 'badge-observation', answer: 'badge-answer',
+      critic: 'badge-critic', error: 'badge-error', query: 'badge-action',
+    }[type] || 'badge-thought';
+
+    const contentClass = type === 'observation' ? 'step-content observation' : 'step-content';
+
+    step.innerHTML = `
+      <div class="step-header">
+        <span class="step-badge ${badgeClass}">${label}</span>
+      </div>
+      <div class="${contentClass}">${escapeHtml(content)}</div>
+    `;
+
+    stepsContainer.appendChild(step);
+    stepsContainer.scrollTop = stepsContainer.scrollHeight;
+  }
+
+  function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+</script>
+
+</body>
+</html>

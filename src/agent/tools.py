@@ -1,21 +1,8 @@
 """Tool definitions for the Customer Insight Agent.
 
-In any good system, the tools are the interface between the brain and the
-world. The agent thinks and plans, but the tools are what actually *do*
-things — search the database, extract entities, analyze sentiment, write
-summaries. Each tool wraps a GCP service (or a local fallback) and exposes
-a clean, callable interface.
-
-The design principle here is the same one I used designing peripheral cards
-for the Apple II: each tool has a standard interface, does one thing well,
-and the system doesn't care about its internals. You could swap BigQuery
-for Elasticsearch, or GCP NL API for a custom model, and the agent wouldn't
-know the difference. That's modularity done right.
-
-All tools use lazy initialization via @property — they don't create GCP
-clients until you actually call them. This means you can import and
-configure the agent without needing live credentials, which is a big
-quality-of-life win for testing and development.
+Each tool wraps a GCP service (or local fallback) behind a uniform callable
+interface. GCP clients are lazily initialized so the module can be imported
+without live credentials.
 """
 
 import json
@@ -26,21 +13,15 @@ import pandas as pd
 
 from ..extraction.vertex_extract import GeminiExtractor
 from ..summarization.vertex_summarize import GeminiSummarizer
+from ..api_utils import generate_with_retry, DEFAULT_MODEL
 
 
 class SearchTool:
-    """Search documents by keywords and filters — the agent's way of finding relevant data.
+    """Keyword search over documents via BigQuery or a local DataFrame.
 
-    This is the "eyes" of the agent. Before it can extract or summarize anything,
-    it needs to find the right documents. The search tool has two paths:
-
-    1. BigQuery (production): Full SQL-powered search over the entire corpus.
-       Scales to millions of documents without breaking a sweat.
-    2. Local DataFrame (MVP/dev): Simple keyword matching on an in-memory DataFrame.
-       No credentials needed, instant results, perfect for prototyping.
-
-    The agent doesn't know or care which path is active — it just calls search()
-    and gets results. That's the whole point.
+    The active backend is selected automatically based on whether a
+    ``documents_df`` was provided at init. The agent does not know or
+    care which backend is active.
     """
 
     def __init__(self, project_id: str = None, dataset: str = "nlp_fun", documents_df: pd.DataFrame = None):
@@ -51,7 +32,7 @@ class SearchTool:
 
     @property
     def bq_client(self):
-        """Lazy BigQuery client — only connects when you actually need it."""
+        """Lazily initialized BigQuery client."""
         if self._bq_client is None and self.project_id:
             from google.cloud import bigquery
             self._bq_client = bigquery.Client(project=self.project_id)
@@ -65,19 +46,17 @@ class SearchTool:
     ) -> list[dict]:
         """Search documents matching query terms.
 
-        Automatically picks the right backend — local DataFrame if one was
-        provided at init, BigQuery otherwise. The agent just calls this
-        and gets results. Clean separation of concerns.
+        Dispatches to the local DataFrame backend or BigQuery depending
+        on initialization.
         """
         if self.documents_df is not None:
             return self._search_local(query, source_type, max_results)
         return self._search_bigquery(query, source_type, max_results)
 
     def _search_local(self, query: str, source_type: Optional[str], max_results: int) -> list[dict]:
-        """Simple keyword search on a local DataFrame.
+        """Case-insensitive keyword search on the local DataFrame.
 
-        Not fancy, but it works. Case-insensitive, requires ALL terms to match.
-        For a prototype, this gets the job done without any infrastructure.
+        All query terms must appear in the text (AND logic).
         """
         df = self.documents_df.copy()
         if source_type:
@@ -91,12 +70,7 @@ class SearchTool:
         return results.to_dict("records")
 
     def _search_bigquery(self, query: str, source_type: Optional[str], max_results: int) -> list[dict]:
-        """Search via BigQuery using parameterized LIKE matching.
-
-        Uses parameterized queries to prevent SQL injection — because even
-        in a prototype, you should never concatenate user input into SQL.
-        That's just basic hygiene. Like washing your hands before soldering.
-        """
+        """Search via BigQuery using parameterized LIKE matching."""
         from google.cloud import bigquery
 
         where_clauses = []
@@ -125,13 +99,11 @@ class SearchTool:
 
 
 class ExtractTool:
-    """Entity extraction tool — uses Gemini for both NER and structured extraction.
+    """Entity and structured extraction via Gemini.
 
-    Two extraction modes, one interface. Entity extraction handles named entity
-    recognition (people, places, orgs, dates, products). Structured extraction
-    handles higher-level semantic information (core issues, attributes, action
-    items, topics). Together they cover both the "what's mentioned" and "what
-    does it mean" questions.
+    Supports two modes: named-entity recognition (people, orgs, products,
+    dates) and semantic structured extraction (core issues, attributes,
+    topics, action items).
     """
 
     def __init__(self, api_key: str = None):
@@ -140,33 +112,26 @@ class ExtractTool:
 
     @property
     def gemini_extractor(self):
-        """Lazy init — Gemini model loads only when extraction is needed."""
+        """Lazily initialized GeminiExtractor."""
         if self._gemini_extractor is None:
             self._gemini_extractor = GeminiExtractor(api_key=self.api_key)
         return self._gemini_extractor
 
     def extract_entities(self, text: str) -> dict:
-        """Extract named entities via Gemini. Comprehensive and context-aware."""
+        """Extract named entities from text via Gemini."""
         entities = self.gemini_extractor.extract_entities(text)
         return {"entities": [{"text": e.text, "type": e.type, "salience": e.salience} for e in entities]}
 
     def extract_structured(self, text: str) -> dict:
-        """Extract semantic structure (issues, attributes, topics) via Gemini.
-
-        This is the deeper extraction — it requires comprehension, not just
-        pattern matching. Gemini reads the text and figures out what the
-        core problems, attributes, and action items are.
-        """
+        """Extract semantic structure (issues, attributes, topics, action items) via Gemini."""
         result = self.gemini_extractor.extract_structured(text)
         return result.to_dict()
 
 
 class SentimentTool:
-    """Sentiment analysis — uses Gemini to assess document sentiment.
+    """Sentiment analysis via Gemini.
 
-    Simple and focused: give it text, get back a score (-1 to +1) and
-    magnitude. The agent uses this to understand how customers feel about
-    things without having to read every single review.
+    Returns a score (-1 to +1) and magnitude for the input text.
     """
 
     def __init__(self, api_key: str = None):
@@ -175,7 +140,7 @@ class SentimentTool:
 
     @property
     def client(self):
-        """Lazy init — no API client until the first sentiment call."""
+        """Lazily initialized genai client."""
         if self._client is None:
             from google import genai
             self._client = genai.Client(api_key=self.api_key)
@@ -185,8 +150,9 @@ class SentimentTool:
         """Analyze document-level sentiment. Returns score and magnitude."""
         from google.genai import types
 
-        response = self.client.models.generate_content(
-            model="gemini-2.5-flash",
+        response = generate_with_retry(
+            self.client,
+            model=DEFAULT_MODEL,
             contents=f"""Analyze the sentiment of the following text.
 Return a JSON object with:
 - "score": a float from -1.0 (very negative) to 1.0 (very positive)
@@ -210,11 +176,10 @@ Text:
 
 
 class SummarizeTool:
-    """Summarization tool — wraps Gemini's text generation for summaries.
+    """Summarization via Gemini.
 
-    Three capabilities in one tool: single-doc summaries, multi-doc
-    synthesis, and comparative analysis. The agent picks whichever mode
-    fits its current reasoning step.
+    Supports single-document summaries, multi-document synthesis, and
+    comparative analysis.
     """
 
     def __init__(self, api_key: str = None):
@@ -223,7 +188,7 @@ class SummarizeTool:
 
     @property
     def summarizer(self):
-        """Lazy init — Gemini model loads on first summarize call."""
+        """Lazily initialized GeminiSummarizer."""
         if self._summarizer is None:
             self._summarizer = GeminiSummarizer(api_key=self.api_key)
         return self._summarizer

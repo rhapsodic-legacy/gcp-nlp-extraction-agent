@@ -1,15 +1,7 @@
 """Unified data loading for heterogeneous text corpora.
 
-Here's a thing I learned building the Apple II: if you want your system to handle
-different kinds of input gracefully, you need a common interface. A floppy disk
-and a cassette tape are totally different hardware, but the computer shouldn't
-have to care — it just wants bytes.
-
-Same idea here. Reviews, support tickets, news articles, Reddit posts — they all
-come in different formats with different column names and different quirks. This
-module normalizes everything into a single Document dataclass so the rest of the
-pipeline never has to think about where the data came from. One connector per
-source, one universal output format. Clean wiring.
+Normalises reviews, support tickets, and news articles into a single Document
+dataclass. One connector per source, one universal output format.
 """
 
 from dataclasses import dataclass, field
@@ -22,13 +14,7 @@ import yaml
 
 @dataclass
 class Document:
-    """Universal document representation — the common bus for all source types.
-
-    Think of this as the data bus in a computer. Every peripheral speaks a
-    different protocol, but they all put their bits on the same bus. Same deal:
-    reviews have ratings, tickets have priorities, news has highlights — but
-    they all have text, an ID, and a source label.
-    """
+    """Universal document representation across all source types."""
 
     id: str
     text: str
@@ -42,7 +28,7 @@ class Document:
 
 
 def _load_config(config_path: str = "config/gcp_config.yaml") -> dict:
-    """Grab settings from the config file. Falls back to sane defaults if missing."""
+    """Load settings from config file. Falls back to defaults if missing."""
     config_file = Path(config_path)
     if config_file.exists():
         with open(config_file) as f:
@@ -53,11 +39,8 @@ def _load_config(config_path: str = "config/gcp_config.yaml") -> dict:
 def load_reviews(data_dir: str = "data/raw/reviews/archive", max_docs: int = None) -> list[Document]:
     """Load Amazon product reviews into Document format.
 
-    These reviews are messy in the best way — real humans typing real opinions.
-    The Datafiniti CSV format has some column name variations across files,
-    so we sniff for the right text column and handle it. The metadata carries
-    along product names, brands, ratings, and dates because that context is
-    gold for downstream extraction.
+    Handles Datafiniti CSV column name variations. Metadata includes
+    product names, brands, ratings, and dates for downstream extraction.
     """
     data_path = Path(data_dir)
     csv_files = list(data_path.glob("*.csv"))
@@ -103,11 +86,8 @@ def load_support_tickets(
 ) -> list[Document]:
     """Load customer support tickets into Document format.
 
-    Fair warning: these tickets are noisy. Lots of template placeholders like
-    {product_purchased} that the preprocessing step will strip out, plus some
-    real gems of auto-generated gibberish. But that's realistic data for you —
-    you don't get to pick your input in production. The metadata is rich though:
-    ticket type, priority, product, resolution status, satisfaction rating.
+    Noisy text with template placeholders (preprocessing strips these).
+    Rich metadata: ticket type, priority, product, resolution, satisfaction.
     """
     df = pd.read_csv(filepath, encoding="utf-8", on_bad_lines="skip")
     df = df.dropna(subset=["Ticket Description"])
@@ -141,14 +121,8 @@ def load_support_tickets(
 def load_news(data_dir: str = "data/raw/news", max_docs: int = None) -> list[Document]:
     """Load CNN/DailyMail articles via HuggingFace datasets library.
 
-    This is the crown jewel of the corpus — real journalism with human-written
-    summary highlights. That means we've got a gold standard to measure our
-    summarization against, which is rare and wonderful. It's like having a
-    known-good reference signal to calibrate your instruments.
-
-    Uses streaming mode to avoid downloading the full ~1.3GB dataset to disk.
-    Only pulls the articles we actually need. We use the test split (~11.5k
-    articles) which is plenty for prototyping.
+    Gold-standard human summaries for evaluation. Uses streaming mode
+    to avoid downloading the full ~1.3GB dataset. Test split (~11.5k articles).
     """
     try:
         from datasets import load_dataset
@@ -185,10 +159,8 @@ def load_reddit(
 ) -> list[Document]:
     """Load Reddit WSB posts into Document format.
 
-    This one's reserved for a future iteration — it's a big, noisy dataset
-    full of memes and financial hot takes. Great stress test for extraction
-    robustness, but not essential for the MVP. Like overclocking: fun, but
-    do the stable build first.
+    Reserved for future iteration. Large, noisy dataset useful for
+    extraction robustness testing.
     """
     df = pd.read_csv(filepath, encoding="utf-8", on_bad_lines="skip")
     df = df.dropna(subset=["body"])
@@ -227,11 +199,6 @@ def load_all_datasets(
     include_news: bool = True,
 ) -> list[Document]:
     """Load all datasets into a unified document list.
-
-    This is the one-call-does-it-all function. It grabs every source,
-    normalizes them into Documents, and hands you back one big list.
-    Like plugging all your peripherals into a USB hub — one cable to
-    the computer, everything just works.
 
     Args:
         data_root: Root data directory.

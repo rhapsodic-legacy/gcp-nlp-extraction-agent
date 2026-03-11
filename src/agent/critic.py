@@ -1,35 +1,8 @@
-"""Critic Agent — the quality gate in an actor-critic architecture.
+"""Critic Agent -- actor-critic quality gate for agent responses.
 
-In reinforcement learning, the actor generates actions and the critic
-evaluates them. Same principle here: the CustomerInsightAgent (actor)
-reasons through tool calls and produces an answer. The CriticAgent
-reviews that answer against the evidence gathered and scores it on
-multiple quality dimensions.
-
-Why a separate module instead of just a method on the actor?
-
-1. Separation of concerns: the actor's job is to reason and act. The
-   critic's job is to evaluate. Mixing them conflates two responsibilities.
-
-2. Independent evolution: you can upgrade the critic's evaluation criteria
-   (add hallucination detection, compliance checks, citation verification)
-   without touching the actor's reasoning logic.
-
-3. Composability: the critic can evaluate outputs from ANY agent — not
-   just CustomerInsightAgent. Swap in a different actor, keep the same
-   quality gate. That's the whole point of modular architecture.
-
-4. Testability: you can unit test the critic with synthetic actor outputs
-   without needing a live Gemini connection for the actor.
-
-The critic evaluates on three axes:
-  - Completeness: does the answer address all parts of the question?
-  - Grounding: are claims supported by evidence from tool results?
-  - Coherence: is the answer well-structured and internally consistent?
-
-Each axis gets a score (1-5) plus a justification. The overall verdict
-is PASS, REVISE, or FAIL. If REVISE, the critic also produces an
-improved version of the answer.
+Evaluates agent answers on completeness, grounding, and coherence (each
+scored 1-5). Returns a PASS, REVISE, or FAIL verdict with an optional
+revised answer. Decoupled from the actor for independent testability.
 """
 
 import json
@@ -40,15 +13,12 @@ from typing import Optional
 from google import genai
 from google.genai import types
 
+from ..api_utils import generate_with_retry, DEFAULT_MODEL
+
 
 @dataclass
 class CriticVerdict:
-    """The critic's evaluation of an agent response.
-
-    Structured output makes this auditable — you can log every verdict
-    to understand how often the critic catches issues, which axes are
-    weakest, and whether the actor is improving over time.
-    """
+    """Structured evaluation result from the critic, including per-axis scores."""
 
     verdict: str  # "PASS", "REVISE", or "FAIL"
     completeness_score: int  # 1-5
@@ -119,33 +89,14 @@ If the verdict is REVISE or FAIL, write a better answer that fixes the identifie
 
 
 class CriticAgent:
-    """Standalone critic that evaluates actor outputs for quality.
+    """Evaluates actor outputs on completeness, grounding, and coherence.
 
-    This is the second half of the actor-critic pattern. The actor
-    (CustomerInsightAgent) does the reasoning and tool-calling. The
-    critic reviews the final output and either approves it, requests
-    revision, or flags it as fundamentally flawed.
-
-    In production, you'd wire this into the pipeline so that every
-    agent response passes through the critic before reaching the user.
-    The critic's verdicts also feed into monitoring — if the REVISE
-    rate spikes, something changed in the actor's behavior and you
-    need to investigate.
-
-    Usage:
-        critic = CriticAgent(api_key=...)
-        verdict = critic.evaluate(
-            query="What are the top complaints?",
-            answer="Customers complain about batteries.",
-            evidence=[("SEARCH(complaints)", "[{...}, {...}]")],
-        )
-        if verdict.verdict == "PASS":
-            return answer
-        else:
-            return verdict.revised_answer
+    Reviews an agent's proposed answer against the gathered evidence and
+    returns a CriticVerdict (PASS / REVISE / FAIL). When the verdict is
+    REVISE or FAIL, a revised answer is included.
     """
 
-    def __init__(self, api_key: str = None, model_name: str = "gemini-2.5-flash"):
+    def __init__(self, api_key: str = None, model_name: str = DEFAULT_MODEL):
         self.api_key = api_key or os.environ.get("GOOGLE_API_KEY")
         self.client = genai.Client(api_key=self.api_key)
         self.model_name = model_name
@@ -182,7 +133,8 @@ class CriticAgent:
         )
 
         try:
-            response = self.client.models.generate_content(
+            response = generate_with_retry(
+                self.client,
                 model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
@@ -197,8 +149,7 @@ class CriticAgent:
             return self._parse_verdict(parsed, response.text)
 
         except (json.JSONDecodeError, AttributeError) as e:
-            # If parsing fails, return a conservative PASS — don't block
-            # the actor's answer because the critic had a bad day.
+            # On parse failure, default to PASS so the actor's answer is not blocked.
             return CriticVerdict(
                 verdict="PASS",
                 completeness_score=3,
@@ -236,12 +187,7 @@ class CriticAgent:
         )
 
     def evaluate_agent_response(self, query: str, agent_response) -> CriticVerdict:
-        """Convenience method that takes an AgentResponse directly.
-
-        Extracts the evidence from the reasoning trace so you don't
-        have to do it manually. Just pass the AgentResponse object
-        from CustomerInsightAgent.query() and the critic handles the rest.
-        """
+        """Convenience wrapper that extracts evidence from an AgentResponse."""
         evidence = []
         for step in agent_response.steps:
             if step.action and step.action != "ANSWER" and step.observation:

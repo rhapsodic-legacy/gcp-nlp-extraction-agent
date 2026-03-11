@@ -1,30 +1,8 @@
-"""Customer Insight Agent — a ReAct-style orchestrator.
+"""Customer Insight Agent -- ReAct-style orchestrator.
 
-This is the brain of the system, and I'm not going to lie, it's the part
-I'm most proud of. The idea is simple but powerful: instead of hardcoding
-a pipeline that does extraction-then-summarization-then-report, you build
-an agent that can *reason* about what tools to use and in what order.
-
-It works like this:
-  1. User asks a complex question
-  2. Agent THINKS about what it needs to know
-  3. Agent picks a TOOL and calls it
-  4. Agent OBSERVES the result
-  5. Agent decides if it needs more info or can answer now
-  6. Repeat steps 2-5 until it has a good answer
-
-This is called a ReAct loop (Reasoning + Acting), and it's basically how
-a good engineer troubleshoots a problem. You don't just run every test —
-you think about what's likely wrong, check that specific thing, and let
-the result guide your next move.
-
-The architecture is:
-  User Query -> Plan -> [Tool Call -> Observe -> Reason]* -> Answer
-
-Gemini serves as the reasoning backbone. The tools (search, extract,
-sentiment, summarize) are the hands. Memory (local or Firestore) is
-the hippocampus. Together they can answer questions that no single API
-call could handle on its own.
+Implements a Reason+Act loop: the agent iteratively selects tools, observes
+results, and reasons about next steps until it can answer the user's query.
+Gemini provides the reasoning backbone; memory is pluggable (local or Firestore).
 """
 
 import json
@@ -39,11 +17,10 @@ from google.genai import types
 
 from .tools import SearchTool, ExtractTool, SentimentTool, SummarizeTool
 from .memory import LocalMemory, FirestoreMemory
+from ..api_utils import generate_with_retry, DEFAULT_MODEL
 
 
-# The system prompt is the agent's instruction manual. It tells Gemini what
-# tools are available, how to format tool calls, and how to reason through
-# multi-step problems. Treat this like firmware — it defines the behavior.
+# System prompt defining available tools, call format, and reasoning protocol.
 SYSTEM_PROMPT = """You are a Customer Insight Agent that helps analysts understand patterns
 in customer feedback, news, and support tickets. You have access to the following tools:
 
@@ -87,11 +64,7 @@ class AgentStep:
 
 @dataclass
 class AgentResponse:
-    """The complete response: final answer plus the full reasoning trace.
-
-    Keeping the trace is important — it lets you audit how the agent
-    arrived at its answer. Debuggability is not optional.
-    """
+    """Complete response containing the final answer and full reasoning trace."""
 
     answer: str
     steps: list[AgentStep] = field(default_factory=list)
@@ -101,25 +74,17 @@ class AgentResponse:
 class CustomerInsightAgent:
     """ReAct agent that orchestrates extraction and summarization tools.
 
-    This is the conductor of the orchestra. It takes a complex analytical
-    question, breaks it down into tool calls, reasons about intermediate
-    results, and builds up a comprehensive answer. Think of it as a very
-    methodical research assistant that shows its work.
-
-    The agent is stateful via memory (LocalMemory for dev, Firestore for
-    production). It remembers what it's been asked and what it's found,
-    which means follow-up questions can build on previous context.
-
-    Optionally, a critic pass validates the final answer for completeness
-    and factual grounding — a lightweight actor-critic pattern that catches
-    low-quality responses before they reach the user.
+    Decomposes analytical questions into tool calls, reasons over intermediate
+    results, and assembles a comprehensive answer. Stateful via pluggable
+    memory (LocalMemory or FirestoreMemory). An optional critic pass validates
+    the final answer for completeness and factual grounding before returning.
     """
 
     def __init__(
         self,
         api_key: str = None,
         documents_df: pd.DataFrame = None,
-        model_name: str = "gemini-2.5-flash",
+        model_name: str = DEFAULT_MODEL,
         use_firestore: bool = False,
         max_steps: int = 10,
         enable_critic: bool = False,
@@ -130,7 +95,7 @@ class CustomerInsightAgent:
         self.max_steps = max_steps
         self.enable_critic = enable_critic
 
-        # Wire up all the tools — each one gets the same API key
+        # Initialize all tools with the shared API key
         self.tools = {
             "SEARCH": SearchTool(documents_df=documents_df),
             "EXTRACT_ENTITIES": ExtractTool(api_key=self.api_key),
@@ -141,18 +106,11 @@ class CustomerInsightAgent:
             "COMPARE": SummarizeTool(api_key=self.api_key),
         }
 
-        # Pick memory backend — Firestore for production persistence,
-        # local dict for development. Same interface either way.
+        # Select memory backend (same interface either way)
         self.memory = FirestoreMemory() if use_firestore else LocalMemory()
 
     def _execute_tool(self, action: str) -> str:
-        """Parse a tool call string and execute the right tool.
-
-        The agent outputs tool calls as "TOOL_NAME(args)" strings, and this
-        method parses that format and dispatches to the right tool. It's
-        essentially a tiny interpreter. Not the prettiest parser in the world,
-        but it works reliably for the formats Gemini produces.
-        """
+        """Parse a ``TOOL_NAME(args)`` string and dispatch to the corresponding tool."""
         try:
             # Parse "TOOL_NAME(args)" format
             paren_idx = action.index("(")
@@ -205,17 +163,14 @@ class CustomerInsightAgent:
                 return f"Unknown tool: {tool_name}"
 
         except Exception as e:
-            # Don't let one bad tool call crash the whole reasoning loop.
-            # Report the error and let the agent reason about what to do next.
+            # Report the error so the agent can reason about recovery.
             return f"Tool error: {type(e).__name__}: {str(e)}"
 
     def _parse_response(self, text: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
-        """Parse THOUGHT/ACTION/ANSWER from the model's text output.
+        """Parse the first THOUGHT/ACTION/ANSWER from model output.
 
-        Only extracts the FIRST thought, action, and answer. If the model
-        outputs multiple THOUGHT/ACTION cycles (simulating the full loop),
-        we take only the first one and ignore the rest. This forces one
-        tool call per reasoning step, which is the whole point of ReAct.
+        Only the first occurrence of each tag is extracted. Subsequent
+        THOUGHT/ACTION cycles are ignored to enforce one tool call per step.
         """
         thought = None
         action = None
@@ -240,14 +195,11 @@ class CustomerInsightAgent:
         return thought, action, answer
 
     def _critic_evaluate(self, user_query: str, answer: str, steps: list[AgentStep]) -> str:
-        """Critic pass — delegates to the standalone CriticAgent.
+        """Run the CriticAgent on the proposed answer.
 
-        This is the integration point between actor and critic. The CriticAgent
-        evaluates the answer on completeness, grounding, and coherence. If the
-        verdict is REVISE or FAIL and the critic provides a revised answer,
-        we use that instead. If PASS, the original answer goes through unchanged.
-
-        The CriticVerdict is stored on self.last_critic_verdict for inspection.
+        Returns the revised answer if the verdict is REVISE or FAIL,
+        otherwise returns the original. Stores the CriticVerdict on
+        ``self.last_critic_verdict`` for inspection.
         """
         from .critic import CriticAgent
 
@@ -275,22 +227,17 @@ class CustomerInsightAgent:
             return answer
 
     def query(self, user_query: str, session_id: str = None) -> AgentResponse:
-        """Process a user query through the full ReAct loop.
+        """Run the ReAct loop for a user query.
 
-        This is the main entry point. Give it a question, get back an answer
-        with a full reasoning trace. The agent will call tools, reason about
-        results, and keep going until it has a good answer or hits the step limit.
-
-        The step limit (default 10) is a safety valve — it prevents infinite
-        loops if the agent gets confused. In practice, most queries resolve
-        in 3-5 steps.
+        Iterates through tool calls and reasoning steps until the agent
+        produces a final answer or reaches ``max_steps``.
 
         Args:
             user_query: Natural language question from the user.
             session_id: Optional session ID for memory persistence across queries.
 
         Returns:
-            AgentResponse with the final answer and every reasoning step.
+            AgentResponse with the final answer and full reasoning trace.
         """
         if session_id is None:
             session_id = str(uuid.uuid4())
@@ -302,10 +249,9 @@ class CustomerInsightAgent:
         steps = []
 
         for step_num in range(self.max_steps):
-            # Ask Gemini what to do next. Stop sequences prevent the model
-            # from simulating tool output — it must stop after ACTION or ANSWER
-            # and let us execute the tool for real.
-            response = self.client.models.generate_content(
+            # Generate next reasoning step; stop sequence prevents simulated output.
+            response = generate_with_retry(
+                self.client,
                 model=self.model_name,
                 contents=SYSTEM_PROMPT + "\n\n" + "\n\n".join(conversation),
                 config=types.GenerateContentConfig(
@@ -319,7 +265,7 @@ class CustomerInsightAgent:
 
             thought, action, answer = self._parse_response(response_text)
 
-            # Got a final answer? Run it through the critic if enabled.
+            # Final answer — optionally validated by the critic.
             if answer:
                 if self.enable_critic:
                     answer = self._critic_evaluate(user_query, answer, steps)
@@ -328,23 +274,22 @@ class CustomerInsightAgent:
                 self.memory.add_message(session_id, "assistant", answer)
                 return AgentResponse(answer=answer, steps=steps, session_id=session_id)
 
-            # Got a tool call? Execute it and feed the result back in.
+            # Tool call — execute and feed the observation back.
             if action:
                 observation = self._execute_tool(action)
                 step = AgentStep(thought=thought or "", action=action, observation=observation)
                 steps.append(step)
 
-                # Append to the conversation so the model can see what happened
+                # Append to conversation context
                 conversation.append(f"THOUGHT: {thought}")
                 conversation.append(f"ACTION: {action}")
                 conversation.append(f"OBSERVATION: {observation}")
             else:
-                # Model didn't follow the protocol — treat its entire response
-                # as the answer. Graceful degradation beats crashing.
+                # Model did not follow the protocol — treat response as the answer.
                 self.memory.add_message(session_id, "assistant", response_text)
                 return AgentResponse(answer=response_text, steps=steps, session_id=session_id)
 
-        # Hit the step limit — give the user what we've got so far
+        # Step limit reached — return partial results.
         final = "I was unable to fully answer your query within the allowed reasoning steps. Here is what I found so far:\n"
         final += "\n".join(s.observation for s in steps if s.observation)
         return AgentResponse(answer=final, steps=steps, session_id=session_id)

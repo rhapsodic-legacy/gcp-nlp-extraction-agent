@@ -1,27 +1,8 @@
-"""Summarization evaluation — because you can't improve what you don't measure.
+"""Summarization evaluation against CNN/DailyMail gold-standard highlights.
 
-Okay, here's the thing that was bugging me about the original MVP: we had
-this beautiful pipeline that could extract entities and generate summaries,
-but no way to know if the summaries were any *good*. That's like building
-an amplifier and never hooking up a scope to measure the output signal.
-You might think it sounds great, but you don't actually know.
-
-The CNN/DailyMail dataset gives us a gift: human-written summary highlights
-for every article. That's our gold standard — the known-good reference signal.
-We can compare our Gemini-generated summaries against those human summaries
-using ROUGE scores, and suddenly we have *numbers* instead of vibes.
-
-This module provides:
-1. ROUGE scoring (ROUGE-1, ROUGE-2, ROUGE-L) — the industry standard for
-   measuring summary quality via n-gram overlap with reference summaries
-2. Length ratio analysis — are our summaries the right length compared to
-   the originals and the references?
-3. Qualitative spot-check helpers — because numbers don't tell the whole
-   story, and sometimes you need to read the actual summaries side by side
-
-ROUGE isn't perfect (it measures word overlap, not semantic quality), but
-it's the accepted benchmark and it gives you a solid foundation for
-iteration. Measure first, improve second. That's engineering.
+Provides ROUGE scoring (ROUGE-1, ROUGE-2, ROUGE-L), length/compression
+analysis, and qualitative spot-check utilities for comparing generated
+summaries against human-written references.
 """
 
 from dataclasses import dataclass, field
@@ -32,16 +13,7 @@ import numpy as np
 
 @dataclass
 class ROUGEScores:
-    """ROUGE scores for a single summary against a reference.
-
-    Three flavors of ROUGE, each telling you something different:
-    - ROUGE-1: Unigram overlap — are the right *words* there?
-    - ROUGE-2: Bigram overlap — are the right *phrases* there?
-    - ROUGE-L: Longest common subsequence — does the overall *structure* match?
-
-    For each, we track precision (how much of the generated summary is relevant),
-    recall (how much of the reference is captured), and F1 (the balance).
-    """
+    """ROUGE-1, ROUGE-2, and ROUGE-L precision/recall/F1 for a single summary."""
 
     rouge1_precision: float = 0.0
     rouge1_recall: float = 0.0
@@ -63,12 +35,7 @@ class ROUGEScores:
 
 @dataclass
 class EvaluationResult:
-    """Full evaluation output for a single document.
-
-    Packages the generated summary, the reference summary, ROUGE scores,
-    and length statistics together. Everything you need to assess quality
-    for one document in one object.
-    """
+    """Evaluation output for a single document: summaries, ROUGE scores, and length statistics."""
 
     doc_id: str
     generated_summary: str
@@ -91,14 +58,9 @@ class EvaluationResult:
 
 
 class SummarizationEvaluator:
-    """Evaluate generated summaries against gold-standard references.
+    """ROUGE-based evaluator for generated summaries against reference summaries.
 
-    This is the measurement instrument. Feed it pairs of (generated, reference)
-    summaries and it'll tell you exactly how they compare — both quantitatively
-    (ROUGE scores) and structurally (length ratios, compression).
-
-    The scorer uses Google's rouge_score library, which is the same implementation
-    used in the original ROUGE paper evaluations. Consistent measurement matters.
+    Uses Google's ``rouge_score`` library with stemming enabled.
     """
 
     def __init__(self):
@@ -106,12 +68,11 @@ class SummarizationEvaluator:
             from rouge_score import rouge_scorer
             self.scorer = rouge_scorer.RougeScorer(
                 ["rouge1", "rouge2", "rougeL"],
-                use_stemmer=True,  # Stemming helps match "running" with "ran", etc.
+                use_stemmer=True,
             )
         except ImportError:
             raise ImportError(
-                "Install rouge-score: pip install rouge-score\n"
-                "It's in requirements.txt — should already be there!"
+                "Install rouge-score: pip install rouge-score"
             )
 
     def score_single(
@@ -121,11 +82,7 @@ class SummarizationEvaluator:
         doc_id: str = "",
         source_text: str = "",
     ) -> EvaluationResult:
-        """Score a single generated summary against its reference.
-
-        This is the atomic evaluation unit. One generated summary, one
-        reference, one set of scores. Everything else builds on this.
-        """
+        """Score a single generated summary against its reference."""
         scores = self.scorer.score(reference, generated)
 
         source_words = len(source_text.split()) if source_text else 0
@@ -160,11 +117,7 @@ class SummarizationEvaluator:
         doc_ids: list[str] = None,
         source_texts: list[str] = None,
     ) -> list[EvaluationResult]:
-        """Score a batch of summaries. Convenience wrapper over score_single.
-
-        Feed it parallel lists of generated and reference summaries,
-        get back a list of EvaluationResults. Simple.
-        """
+        """Score parallel lists of generated and reference summaries."""
         if doc_ids is None:
             doc_ids = [f"doc_{i}" for i in range(len(generated_summaries))]
         if source_texts is None:
@@ -177,27 +130,16 @@ class SummarizationEvaluator:
 
     @staticmethod
     def aggregate_scores(results: list[EvaluationResult]) -> dict:
-        """Compute aggregate statistics across a batch of evaluations.
-
-        This is where you get the headline numbers — average ROUGE scores
-        across your whole test set. These are the numbers you'd put in a
-        report or use to compare different summarization approaches.
-
-        Returns mean and std for each metric, plus length statistics.
-        Standard deviation matters because it tells you how *consistent*
-        the quality is — a high mean with high variance means some summaries
-        are great and others are terrible, which is worse than moderate
-        quality across the board.
-        """
+        """Compute mean and std of ROUGE scores and length statistics across results."""
         if not results:
             return {}
 
-        # Collect all the F1 scores (the most commonly reported metric)
+        # F1 scores
         r1_f1 = [r.rouge_scores.rouge1_f1 for r in results]
         r2_f1 = [r.rouge_scores.rouge2_f1 for r in results]
         rL_f1 = [r.rouge_scores.rougeL_f1 for r in results]
 
-        # Also grab precision and recall for the full picture
+        # Precision and recall
         r1_p = [r.rouge_scores.rouge1_precision for r in results]
         r1_r = [r.rouge_scores.rouge1_recall for r in results]
         r2_p = [r.rouge_scores.rouge2_precision for r in results]
@@ -238,11 +180,7 @@ class SummarizationEvaluator:
 
     @staticmethod
     def print_report(aggregate: dict, title: str = "Summarization Evaluation Report"):
-        """Pretty-print an evaluation report to the console.
-
-        Because numbers in a dict are hard to read, and engineers deserve
-        nicely formatted output too.
-        """
+        """Pretty-print an aggregate evaluation report to the console."""
         print(f"\n{'=' * 60}")
         print(f"  {title}")
         print(f"{'=' * 60}")
@@ -266,19 +204,12 @@ class SummarizationEvaluator:
 
     @staticmethod
     def qualitative_spot_check(results: list[EvaluationResult], n: int = 3) -> list[dict]:
-        """Pull the best, worst, and median examples for human review.
-
-        Numbers are essential, but you also need to *read* some summaries
-        to really understand quality. This method finds the highest-scoring,
-        lowest-scoring, and middle-of-the-road examples so you can eyeball
-        them. It's the engineering equivalent of probing a few test points
-        on your board after running automated tests.
-        """
+        """Return the worst, best, and median examples by ROUGE-1 F1 for manual review."""
         sorted_results = sorted(results, key=lambda r: r.rouge_scores.rouge1_f1)
 
         spot_checks = []
 
-        # Worst performer — what's going wrong?
+        # Worst performer
         if sorted_results:
             worst = sorted_results[0]
             spot_checks.append({
@@ -289,7 +220,7 @@ class SummarizationEvaluator:
                 "reference": worst.reference_summary,
             })
 
-        # Best performer — what's going right?
+        # Best performer
         if sorted_results:
             best = sorted_results[-1]
             spot_checks.append({
@@ -300,7 +231,7 @@ class SummarizationEvaluator:
                 "reference": best.reference_summary,
             })
 
-        # Median — what does typical performance look like?
+        # Median performer
         if len(sorted_results) >= 3:
             mid = sorted_results[len(sorted_results) // 2]
             spot_checks.append({

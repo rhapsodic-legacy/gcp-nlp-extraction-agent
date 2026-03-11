@@ -1,39 +1,38 @@
-# ============================================================
-# Dependencies: every component earns its spot here
-# ============================================================
-# Every package here does something specific and necessary.
-# If you can't explain why it's here in one sentence, it
-# shouldn't be here.
-# ============================================================
-
-# Core data wrangling: the foundation everything sits on
+# Core
 pandas>=2.0.0
 numpy>=1.24.0
 
-# GCP Services: the managed service backbone
-google-genai>=1.0.0                # Gemini API (generative language)
-google-cloud-language>=2.11.0      # NL API for entity extraction & sentiment
-google-cloud-storage>=2.14.0       # Cloud Storage for raw data
-google-cloud-bigquery>=3.14.0      # BigQuery for production document queries
-google-cloud-firestore>=2.14.0     # Firestore for agent session memory
+# GCP Services
+google-genai>=1.0.0                # Gemini API
+google-cloud-language>=2.11.0      # NL API (entity extraction, sentiment)
+google-cloud-storage>=2.14.0       # Cloud Storage
+google-cloud-bigquery>=3.14.0      # BigQuery
+google-cloud-firestore>=2.14.0     # Firestore (agent session memory)
 
-# NLP Baselines: because you should always have something to compare against
-spacy>=3.7.0                       # Local NER baseline (fast, free, offline)
-presidio-analyzer>=2.2.0           # Microsoft Presidio PII-focused NER baseline
+# NLP Baselines
+spacy>=3.7.0                       # Local NER baseline
+presidio-analyzer>=2.2.0           # Presidio PII-focused NER
 sumy>=0.11.0                       # Extractive summarisation baseline
-nltk>=3.8.0                        # Tokenisation and text stats
+nltk>=3.8.0                        # Tokenisation, text stats
 
-# Data & Evaluation: you can't improve what you don't measure
-datasets>=2.16.0                   # HuggingFace datasets (CNN/DailyMail loader)
-rouge-score>=0.1.2                 # ROUGE metrics for summarisation quality
+# Evaluation
+datasets>=2.16.0                   # HuggingFace datasets (CNN/DailyMail)
+rouge-score>=0.1.2                 # ROUGE metrics
 bert-score>=0.3.13                 # BERTScore semantic similarity
 
-# Visualisation: making the EDA notebooks look good
+# Visualisation
 matplotlib>=3.8.0
 seaborn>=0.13.0
 wordcloud>=1.9.0
 
-# Utilities: the little things that keep life sane
+# Web API
+fastapi>=0.110.0                   # Streaming agent API
+uvicorn[standard]>=0.27.0         # ASGI server
+
+# Dashboard
+streamlit>=1.31.0                  # Evaluation dashboard
+
+# Utilities
 pyyaml>=6.0.0
 tqdm>=4.66.0
 python-dotenv>=1.0.0

@@ -74,11 +74,9 @@ def build_pdf():
     # Section 1: Technical Approach
     pdf.section_title("Technical Approach & GCP Services")
     pdf.body_text(
-        "This system extracts entities and information from heterogeneous unstructured text, "
-        "generates abstractive summaries, and orchestrates these capabilities through a ReAct-style agent. "
-        "The architecture follows a dual-backend pattern: local tools (SpaCy, ROUGE) serve as baselines "
-        "during development, while GCP-native services (Gemini, Natural Language API) provide production-grade "
-        "capabilities through the same interfaces."
+        "Entity extraction, abstractive summarisation, and multi-step analytical queries orchestrated "
+        "through a ReAct-style agent. Dual-backend architecture: local tools (SpaCy, ROUGE) as development "
+        "baselines; GCP-native services (Gemini, BigQuery, Firestore) for production."
     )
 
     pdf.bold_text("Datasets: Three heterogeneous sources to stress-test extraction:")
@@ -107,9 +105,8 @@ def build_pdf():
     pdf.table_row(["ROUGE-L F1", "0.217", "0.207", "-4.6%"])
     pdf.ln(0.5)
     pdf.body_text(
-        "Gemini's ROUGE-1 improvement shows superior information coverage. Lower ROUGE-2/L reflects "
-        "a known ROUGE limitation: abstractive summaries paraphrase rather than copy, reducing n-gram "
-        "overlap while improving readability (Kryscinski et al., 2019).",
+        "ROUGE-1 improvement reflects superior information coverage. Lower ROUGE-2/L is expected: "
+        "abstractive paraphrasing reduces n-gram overlap (Kryscinski et al., 2019). BERTScore addresses this.",
         spacing=1,
     )
 
@@ -120,16 +117,16 @@ def build_pdf():
     pdf.table_row(["BERTScore F1", "0.8631", "0.8780", "+1.7%"])
     pdf.ln(0.5)
     pdf.body_text(
-        "BERTScore uses contextual embeddings (RoBERTa-large) to measure meaning preservation. "
-        "Gemini outperforms across all dimensions, confirming semantic superiority despite lower ROUGE-2/L.",
+        "Gemini outperforms across all BERTScore dimensions (RoBERTa-large embeddings), confirming "
+        "semantic superiority despite lower ROUGE-2/L.",
         spacing=1,
     )
 
     pdf.subsection_title("Information Extraction: Needle-in-a-Haystack (3-way comparison)")
     pdf.body_text(
         "Six synthetic needles with known entities injected at controlled positions across a "
-        "230-document corpus. Three extractors compared: SpaCy (general NER), Microsoft Presidio "
-        "(PII-focused NER), and Gemini 2.5 Flash (LLM-based extraction).",
+        "230-document corpus. Three extractors benchmarked: SpaCy (general NER), Presidio "
+        "(PII-focused), Gemini 2.5 Flash (LLM-based).",
         spacing=0.5,
     )
     pdf.table_row(["Metric", "SpaCy", "Presidio", "Gemini"], bold=True)
@@ -141,17 +138,17 @@ def build_pdf():
     pdf.table_row(["PRODUCT", "50%", "50%", "50%"])
     pdf.ln(0.5)
     pdf.body_text(
-        "Presidio excels at PII entities (PERSON, DATE, location: all 100%) but does not target general "
-        "NER categories (ORG, MONEY). SpaCy and Gemini match on aggregate recall; Gemini captures more "
-        "precise entity boundaries. Complementary strengths argue for combining all three in production.",
+        "Complementary strengths: Presidio achieves 100% on PII types but does not target general NER (ORG, MONEY). "
+        "SpaCy and Gemini match on aggregate recall; Gemini captures more precise boundaries. "
+        "Production recommendation: combine all three.",
         spacing=1,
     )
 
     # Section 3: Agentic Workflow
     pdf.section_title("Agentic Workflow: Customer Insight Agent")
     pdf.body_text(
-        "Scenario: An analyst asks a complex question requiring search, extraction, sentiment analysis, "
-        "and synthesis across multiple document types. No single API call answers this.",
+        "Multi-step analytical queries requiring search, extraction, sentiment analysis, and synthesis "
+        "across document types. No single API call suffices.",
         spacing=1,
     )
     pdf.bold_text("Architecture (ReAct Pattern):")
@@ -162,8 +159,8 @@ def build_pdf():
     )
     pdf.body_text(
         "7 Tools: SEARCH, EXTRACT_ENTITIES, EXTRACT_STRUCTURED, ANALYZE_SENTIMENT, SUMMARIZE, "
-        "SUMMARIZE_MULTIPLE, COMPARE. Each wraps a GCP service behind a standard interface; the agent "
-        "does not know which backend handles requests. Swap BigQuery for Elasticsearch without changing logic.",
+        "SUMMARIZE_MULTIPLE, COMPARE. Each wraps a GCP service behind a standard interface. "
+        "Backend-agnostic: swap BigQuery for Elasticsearch without changing agent logic.",
         spacing=1,
     )
     pdf.body_text(
@@ -172,27 +169,23 @@ def build_pdf():
         spacing=1,
     )
     pdf.body_text(
-        "Critic Validation: After the agent produces a final answer, an optional critic pass evaluates "
-        "the response for completeness and factual grounding, checking whether the answer addresses the "
-        "query, cites evidence from tool results, and flags unsupported claims. This lightweight actor-critic "
-        "pattern catches low-quality answers before they reach the user.",
+        "Critic Validation: Optional post-answer pass evaluates completeness, factual grounding, and "
+        "coherence. Flags unsupported claims before they reach the user. One additional API call; "
+        "doubles as a production audit layer.",
         spacing=1,
     )
 
     pdf.subsection_title("Scaling Agent Architecture")
     pdf.body_text(
-        "Actor-Critic Pair: The actor (ReAct loop) generates reasoning and tool calls. A separate critic "
-        "evaluates each step or final output, checking entity recall, flagging implausible sentiment "
-        "scores, verifying synthesis addresses the question. Analogous to a GAN discriminator: the actor "
-        "improves because the critic provides targeted feedback. In production, doubles as an audit layer.",
+        "Actor-Critic Pair: Separate critic evaluates each output for entity recall, sentiment "
+        "plausibility, and synthesis completeness. Implemented as optional validation pass; "
+        "ready to be mandatory for customer-facing traffic.",
         spacing=1,
     )
     pdf.body_text(
-        "Hierarchical Decomposition: For complex queries spanning multiple document types, a coordinator "
-        "agent decomposes tasks into sub-goals, dispatches to specialised worker agents (sentiment, "
-        "extraction, temporal analysis), and synthesises outputs. Enables parallelism, fault isolation, "
-        "and per-domain specialisation. Activate when: tools exceed ~15, queries need >10 steps, "
-        "or SLAs require parallel execution.",
+        "Hierarchical Decomposition: Coordinator agent decomposes complex queries into sub-goals, "
+        "dispatches to specialised workers, synthesises outputs. Enables parallelism and fault isolation. "
+        "Activation criteria: tools >15, queries >10 steps, or SLAs requiring parallel execution.",
         spacing=1,
     )
 

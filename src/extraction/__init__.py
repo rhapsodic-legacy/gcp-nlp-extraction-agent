@@ -9,4 +9,7 @@ def __getattr__(name):
     if name == "GeminiExtractor":
         from .vertex_extract import GeminiExtractor
         return GeminiExtractor
+    if name == "EnsembleExtractor":
+        from .ensemble import EnsembleExtractor
+        return EnsembleExtractor
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
