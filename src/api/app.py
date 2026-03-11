@@ -208,11 +208,22 @@ async def stream_query(req: QueryRequest):
 
     async def event_stream():
         session_id = req.session_id or str(uuid.uuid4())
+
+        # Build multi-turn history BEFORE adding new message
+        history_msgs = memory.get_messages(session_id, limit=20)
+        history_block = ""
+        if history_msgs:
+            lines = [f"{m['role'].upper()}: {m['content']}" for m in history_msgs]
+            history_block = "CONVERSATION HISTORY:\n" + "\n".join(lines[-3000:])
+
         memory.add_message(session_id, "user", req.query)
 
         client = genai.Client(api_key=api_key)
         tools = _build_tools(api_key)
-        conversation = [f"User query: {req.query}"]
+        conversation = []
+        if history_block:
+            conversation.append(history_block)
+        conversation.append(f"User query: {req.query}")
         max_steps = 10
 
         yield _sse("session", {"session_id": session_id})

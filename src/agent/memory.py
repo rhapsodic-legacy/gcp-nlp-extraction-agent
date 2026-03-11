@@ -51,6 +51,13 @@ class LocalMemory:
             self.create_session(session_id)
         self.sessions[session_id]["context"][key] = value
 
+    def get_messages(self, session_id: str, limit: int = 50) -> list[dict]:
+        """Retrieve recent messages from a session, ordered by time."""
+        session = self.sessions.get(session_id)
+        if not session:
+            return []
+        return session["messages"][-limit:]
+
     def get_context(self, session_id: str, key: str, default=None):
         """Retrieve a context value, returning *default* if not found."""
         session = self.sessions.get(session_id, {})

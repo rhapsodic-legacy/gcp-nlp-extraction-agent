@@ -50,7 +50,12 @@ Important:
 - Apply extraction/sentiment on specific documents, not vague queries
 - Synthesize findings before answering
 - Be specific — cite document sources and data points
+- This is a multi-turn conversation. Prior exchanges are shown as CONVERSATION HISTORY.
+  Use that context to resolve references like "those", "the same", "drill into", etc.
 """
+
+# Maximum characters of conversation history to include in the prompt.
+MAX_HISTORY_CHARS = 3000
 
 
 @dataclass
@@ -226,11 +231,40 @@ class CustomerInsightAgent:
             self.last_critic_verdict = None
             return answer
 
+    def _build_history_context(self, session_id: str) -> str:
+        """Build a conversation history block from prior session messages.
+
+        Includes up to MAX_HISTORY_CHARS of prior exchanges so the agent
+        can resolve references like 'those', 'drill into', 'compare to last'.
+        Returns an empty string for new sessions.
+        """
+        messages = self.memory.get_messages(session_id)
+        if not messages:
+            return ""
+
+        lines = []
+        total_chars = 0
+        # Walk backwards from most recent, prepend to preserve order
+        for msg in reversed(messages):
+            role = msg["role"].upper()
+            content = msg["content"]
+            line = f"{role}: {content}"
+            total_chars += len(line)
+            if total_chars > MAX_HISTORY_CHARS:
+                break
+            lines.insert(0, line)
+
+        if not lines:
+            return ""
+        return "CONVERSATION HISTORY:\n" + "\n".join(lines)
+
     def query(self, user_query: str, session_id: str = None) -> AgentResponse:
         """Run the ReAct loop for a user query.
 
-        Iterates through tool calls and reasoning steps until the agent
-        produces a final answer or reaches ``max_steps``.
+        Supports multi-turn conversations: when a session_id is provided
+        and has prior messages, the conversation history is included in
+        the prompt so the agent can resolve references like 'those',
+        'the shipping ones', 'compare to last time', etc.
 
         Args:
             user_query: Natural language question from the user.
@@ -242,10 +276,17 @@ class CustomerInsightAgent:
         if session_id is None:
             session_id = str(uuid.uuid4())
 
+        # Build history BEFORE adding the new message so we don't include
+        # the current query twice.
+        history_block = self._build_history_context(session_id)
+
         self.memory.add_message(session_id, "user", user_query)
 
         # Build the conversation context for the model
-        conversation = [f"User query: {user_query}"]
+        conversation = []
+        if history_block:
+            conversation.append(history_block)
+        conversation.append(f"User query: {user_query}")
         steps = []
 
         for step_num in range(self.max_steps):

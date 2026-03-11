@@ -302,6 +302,9 @@
   const emptyState = document.getElementById('empty-state');
   const criticToggle = document.getElementById('critic-toggle');
 
+  // Multi-turn: persist session across queries
+  let currentSessionId = null;
+
   // Health check on load
   fetch('/api/health')
     .then(r => r.json())
@@ -328,13 +331,19 @@
     const query = queryInput.value.trim();
     if (!query) return;
 
-    // Clear empty state and previous results
+    // Clear empty state (but keep prior steps for multi-turn context)
     if (emptyState) emptyState.remove();
-    stepsContainer.innerHTML = '';
 
     sendBtn.disabled = true;
     spinner.classList.add('active');
     queryInput.value = '';
+
+    // Add separator for follow-up queries
+    if (currentSessionId) {
+      const sep = document.createElement('div');
+      sep.style.cssText = 'border-top:1px solid var(--border);margin:12px 0;';
+      stepsContainer.appendChild(sep);
+    }
 
     // Add user query step
     addStep('query', `"${query}"`, 'Query');
@@ -345,6 +354,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           query,
+          session_id: currentSessionId,
           enable_critic: criticToggle.checked,
         }),
       });
@@ -379,6 +389,9 @@
 
   function handleEvent(evt) {
     switch (evt.type) {
+      case 'session':
+        currentSessionId = evt.session_id;
+        break;
       case 'thought':
         addStep('thought', evt.content, `Step ${evt.step} — Thought`);
         break;
