@@ -28,7 +28,7 @@ from google.genai import types
 from ..agent.tools import SearchTool, ExtractTool, SentimentTool, SummarizeTool
 from ..agent.memory import LocalMemory
 from ..agent.critic import CriticAgent
-from ..api_utils import generate_with_retry, DEFAULT_MODEL
+from ..api_utils import generate_with_retry, DEFAULT_MODEL, usage, reset_usage
 
 # ── FastAPI app ──────────────────────────────────────────────────────
 app = FastAPI(
@@ -354,6 +354,19 @@ async def health():
         "data_loaded": has_data,
         "documents_count": len(_documents_df) if has_data else 0,
     }
+
+
+@app.get("/api/usage")
+async def get_usage():
+    """Return accumulated token usage and estimated cost."""
+    return usage.to_dict()
+
+
+@app.post("/api/usage/reset")
+async def reset_usage_stats():
+    """Reset the usage tracker."""
+    reset_usage()
+    return {"status": "ok"}
 
 
 @app.get("/", response_class=HTMLResponse)

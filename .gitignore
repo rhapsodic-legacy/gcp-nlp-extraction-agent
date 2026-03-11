@@ -9,6 +9,9 @@ venv/
 env/
 .Python
 
+# Notebooks
+.ipynb_checkpoints/
+
 # Testing
 .pytest_cache/
 .coverage

@@ -199,12 +199,16 @@ class CustomerInsightAgent:
 
         return thought, action, answer
 
-    def _critic_evaluate(self, user_query: str, answer: str, steps: list[AgentStep]) -> str:
-        """Run the CriticAgent on the proposed answer.
+    def _critic_evaluate(self, user_query: str, answer: str, steps: list[AgentStep],
+                         conversation: list[str]) -> str:
+        """Run the CriticAgent, then feed critique back to the agent for self-correction.
 
-        Returns the revised answer if the verdict is REVISE or FAIL,
-        otherwise returns the original. Stores the CriticVerdict on
-        ``self.last_critic_verdict`` for inspection.
+        Instead of returning the critic's revised_answer directly (which
+        lacks access to the tools and evidence), we feed the critique back
+        into the agent's reasoning loop so it can produce a better answer
+        using its full context.
+
+        Stores the CriticVerdict on ``self.last_critic_verdict`` for inspection.
         """
         from .critic import CriticAgent
 
@@ -222,7 +226,35 @@ class CustomerInsightAgent:
             )
             self.last_critic_verdict = verdict
 
-            if verdict.verdict in ("REVISE", "FAIL") and verdict.revised_answer:
+            if verdict.verdict == "PASS":
+                return answer
+
+            # Self-correction: feed the critique back to the agent
+            critique_feedback = self._format_critique(verdict)
+            conversation.append(f"THOUGHT: Here is my proposed answer:\n{answer}")
+            conversation.append(f"CRITIC FEEDBACK: {critique_feedback}")
+
+            # One more generation pass with the critique context
+            response = generate_with_retry(
+                self.client,
+                model=self.model_name,
+                contents=SYSTEM_PROMPT + "\n\n" + "\n\n".join(conversation)
+                    + "\n\nRevise your answer based on the critic's feedback. "
+                    "Respond with:\nTHOUGHT: <reasoning about how to improve>\n"
+                    "ANSWER: <your improved answer>",
+                config=types.GenerateContentConfig(
+                    temperature=0.2,
+                    max_output_tokens=1024,
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
+                ),
+            )
+
+            _, _, revised = self._parse_response(response.text.strip())
+            if revised:
+                return revised
+
+            # Fallback: use critic's revised answer if agent didn't produce one
+            if verdict.revised_answer:
                 return verdict.revised_answer
             return answer
 
@@ -230,6 +262,18 @@ class CustomerInsightAgent:
             # Critic failure should never block the answer
             self.last_critic_verdict = None
             return answer
+
+    @staticmethod
+    def _format_critique(verdict) -> str:
+        """Format a CriticVerdict into a feedback string for the agent."""
+        parts = [f"Verdict: {verdict.verdict} (overall: {verdict.overall_score}/5)"]
+        if verdict.completeness_score < 4:
+            parts.append(f"Completeness ({verdict.completeness_score}/5): {verdict.completeness_reason}")
+        if verdict.grounding_score < 4:
+            parts.append(f"Grounding ({verdict.grounding_score}/5): {verdict.grounding_reason}")
+        if verdict.coherence_score < 4:
+            parts.append(f"Coherence ({verdict.coherence_score}/5): {verdict.coherence_reason}")
+        return " | ".join(parts)
 
     def _build_history_context(self, session_id: str) -> str:
         """Build a conversation history block from prior session messages.
@@ -309,7 +353,7 @@ class CustomerInsightAgent:
             # Final answer — optionally validated by the critic.
             if answer:
                 if self.enable_critic:
-                    answer = self._critic_evaluate(user_query, answer, steps)
+                    answer = self._critic_evaluate(user_query, answer, steps, conversation)
                 step = AgentStep(thought=thought or "", action="ANSWER", observation=answer)
                 steps.append(step)
                 self.memory.add_message(session_id, "assistant", answer)
