@@ -28,6 +28,7 @@ from google.genai import types
 from ..agent.tools import SearchTool, ExtractTool, SentimentTool, SummarizeTool
 from ..agent.memory import LocalMemory
 from ..agent.critic import CriticAgent
+from ..agent.planner import HierarchicalPlanner, StepStatus
 from ..api_utils import generate_with_retry, DEFAULT_MODEL, usage, reset_usage
 
 # ── FastAPI app ──────────────────────────────────────────────────────
@@ -66,6 +67,17 @@ class QueryRequest(BaseModel):
     query: str
     session_id: Optional[str] = None
     enable_critic: bool = False
+
+
+class PlannerQueryRequest(BaseModel):
+    query: str
+    enable_critic: bool = True
+    enable_escalation: bool = True
+
+
+class EscalationDecision(BaseModel):
+    approved: bool
+    reason: Optional[str] = None
 
 
 class LoadDataRequest(BaseModel):
@@ -327,6 +339,155 @@ def _sse(event_type: str, data: dict) -> str:
     """Format a single SSE message."""
     payload = json.dumps({"type": event_type, **data})
     return f"event: message\ndata: {payload}\n\n"
+
+
+# ── Hierarchical planner endpoint ────────────────────────────────────
+
+@app.post("/api/planner/stream")
+async def stream_planner_query(req: PlannerQueryRequest):
+    """Stream hierarchical planner execution as Server-Sent Events.
+
+    Event types:
+      - plan: The decomposed execution plan (DAG of sub-tasks)
+      - step_start: A sub-agent is starting execution
+      - step_complete: A sub-agent finished (includes its answer)
+      - parallel_batch: Group of steps executing in parallel
+      - synthesis: Synthesizing sub-results into final answer
+      - escalation: Query flagged for human review
+      - answer: Final synthesized answer
+      - error / done: Error or stream complete
+    """
+    api_key = _get_api_key()
+
+    async def event_stream():
+        planner = HierarchicalPlanner(
+            api_key=api_key,
+            documents_df=_documents_df,
+            enable_critic=req.enable_critic,
+            enable_escalation=req.enable_escalation,
+        )
+
+        # Step 1: Create the plan
+        plan = planner._create_plan(req.query)
+
+        yield _sse("plan", {
+            "query": plan.query,
+            "steps": [
+                {"id": s.id, "task": s.task, "depends_on": s.depends_on}
+                for s in plan.steps
+            ],
+            "synthesis_instruction": plan.synthesis_instruction,
+        })
+
+        # Step 2: Check escalation
+        if plan.should_escalate and req.enable_escalation:
+            yield _sse("escalation", {
+                "reason": plan.escalation_reason,
+                "message": "This query has been flagged for human review. "
+                           "The agent will still attempt an answer, but results "
+                           "should be verified by a human analyst.",
+            })
+
+        # Step 3: Execute DAG with streaming updates
+        results: dict[str, str] = {}
+        completed: set[str] = set()
+        step_map = {s.id: s for s in plan.steps}
+
+        while len(completed) < len(plan.steps):
+            ready = [
+                s for s in plan.steps
+                if s.id not in completed
+                and s.status == StepStatus.PENDING
+                and all(d in completed for d in s.depends_on)
+            ]
+
+            if not ready:
+                break
+
+            # Emit parallel batch info
+            if len(ready) > 1:
+                yield _sse("parallel_batch", {
+                    "step_ids": [s.id for s in ready],
+                    "message": f"Executing {len(ready)} sub-tasks in parallel",
+                })
+
+            for s in ready:
+                s.status = StepStatus.RUNNING
+
+            async def _run_step(step):
+                context_parts = []
+                for dep_id in step.depends_on:
+                    if dep_id in results:
+                        dep = step_map[dep_id]
+                        context_parts.append(f"[{dep_id}: {dep.task}]\n{results[dep_id]}")
+                context = "\n\n".join(context_parts)
+                response = await asyncio.to_thread(
+                    planner._run_sub_agent, step.task, context
+                )
+                return step.id, response.answer
+
+            # Emit step_start for each
+            for s in ready:
+                yield _sse("step_start", {"id": s.id, "task": s.task})
+
+            # Execute in parallel
+            tasks = [_run_step(s) for s in ready]
+            step_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for result in step_results:
+                if isinstance(result, Exception):
+                    for s in ready:
+                        if s.status == StepStatus.RUNNING:
+                            s.status = StepStatus.FAILED
+                            s.result = f"Error: {result}"
+                            results[s.id] = s.result
+                            completed.add(s.id)
+                            yield _sse("step_complete", {
+                                "id": s.id, "status": "failed",
+                                "content": s.result[:2000],
+                            })
+                            break
+                else:
+                    step_id, answer = result
+                    step_map[step_id].status = StepStatus.COMPLETED
+                    step_map[step_id].result = answer
+                    results[step_id] = answer
+                    completed.add(step_id)
+                    yield _sse("step_complete", {
+                        "id": step_id, "status": "completed",
+                        "content": answer[:2000],
+                    })
+
+        # Step 4: Synthesize
+        yield _sse("synthesis", {"message": "Synthesizing sub-task results..."})
+
+        try:
+            final_answer = await asyncio.to_thread(
+                planner._synthesize, req.query,
+                plan.synthesis_instruction, results, plan,
+            )
+        except Exception as e:
+            yield _sse("error", {"message": f"Synthesis failed: {e}"})
+            yield _sse("done", {})
+            return
+
+        response_data = {"content": final_answer}
+        if plan.should_escalate:
+            response_data["escalated"] = True
+            response_data["escalation_reason"] = plan.escalation_reason
+
+        yield _sse("answer", response_data)
+        yield _sse("done", {})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ── REST endpoints ───────────────────────────────────────────────────

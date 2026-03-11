@@ -6,6 +6,9 @@ def __getattr__(name):
     if name == "CriticAgent":
         from .critic import CriticAgent
         return CriticAgent
+    if name == "HierarchicalPlanner":
+        from .planner import HierarchicalPlanner
+        return HierarchicalPlanner
     if name in ("SearchTool", "ExtractTool", "SentimentTool", "SummarizeTool"):
         from . import tools
         return getattr(tools, name)
