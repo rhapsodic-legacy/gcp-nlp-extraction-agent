@@ -1,4 +1,4 @@
-# NLP Extraction & Agentic Workflows -- GCP
+# NLP Extraction & Agentic Workflows -- GCP 
 
 Entity extraction, abstractive summarization, and hierarchical multi-agent analytical queries. All backed by GCP services.
 
